@@ -1,0 +1,19 @@
+# dependências / build
+node_modules/
+dist/
+build/
+
+# vercel
+.vercel/
+
+# ambiente
+.env
+.env.*
+!.env.example
+
+# sistema / editor
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/

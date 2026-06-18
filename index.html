@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Telemetria · Claude Code</title>
+<meta name="description" content="Estatísticas locais de uso de tokens do Claude Code: quanto, como e onde você gastou." />
+<meta name="theme-color" content="#0d0f12" />
+<link rel="manifest" href="manifest.webmanifest" />
+<link rel="icon" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<style>
+  :root{
+    --bg:#0d0f12; --surface:#15181d; --surface-2:#1b1f26; --border:#252a32;
+    --text:#e6e8eb; --muted:#8b929c; --faint:#5b626c;
+    --accent:#d97757; --accent-soft:#f0a584; --cool:#6ea8fe;
+    --hm0:#171a1f; --hm1:#4a2a20; --hm2:#8a4129; --hm3:#c0623c; --hm4:#f0a584;
+    --radius:14px; --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:
+      radial-gradient(1200px 600px at 80% -10%, #1a1410 0%, transparent 55%),
+      var(--bg);
+    color:var(--text); font-family:var(--sans);
+    -webkit-font-smoothing:antialiased; line-height:1.5;
+    padding:max(env(safe-area-inset-top),18px) 18px 80px;
+  }
+  .wrap{max-width:1080px;margin:0 auto}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--accent);margin:0 0 6px}
+  h1{font-family:var(--mono);font-weight:600;font-size:clamp(22px,4vw,30px);letter-spacing:.04em;margin:0;text-transform:uppercase}
+  h1 .dim{color:var(--faint)}
+  .sub{color:var(--muted);margin:8px 0 0;max-width:60ch;font-size:14px}
+  header.app{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:26px}
+  .ghost-btn{font-family:var(--mono);font-size:12px;letter-spacing:.05em;color:var(--muted);background:var(--surface);
+    border:1px solid var(--border);border-radius:10px;padding:9px 13px;cursor:pointer;transition:.15s}
+  .ghost-btn:hover{color:var(--text);border-color:var(--accent)}
+  .ghost-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  /* drop / intake */
+  .drop{border:1.5px dashed var(--border);border-radius:var(--radius);background:var(--surface);
+    padding:40px 26px;text-align:center;transition:.18s}
+  .drop.drag{border-color:var(--accent);background:#191512}
+  .drop h2{font-family:var(--mono);font-size:15px;letter-spacing:.04em;margin:0 0 6px;font-weight:600}
+  .drop p{color:var(--muted);font-size:13px;margin:0 auto 18px;max-width:54ch}
+  .drop .path{font-family:var(--mono);color:var(--accent-soft);background:#1f1813;padding:2px 7px;border-radius:6px;font-size:12px}
+  .actions{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+  .btn{font-family:var(--mono);font-size:13px;letter-spacing:.03em;border-radius:10px;padding:11px 16px;cursor:pointer;border:1px solid transparent;transition:.15s}
+  .btn.primary{background:var(--accent);color:#1a0f0a;font-weight:600}
+  .btn.primary:hover{background:var(--accent-soft)}
+  .btn.sec{background:transparent;border-color:var(--border);color:var(--text)}
+  .btn.sec:hover{border-color:var(--accent)}
+  .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .hint{margin-top:18px;font-size:12px;color:var(--faint);font-family:var(--mono)}
+  .hint code{color:var(--muted)}
+
+  .status{margin-top:14px;font-family:var(--mono);font-size:12px;color:var(--muted);min-height:16px}
+  .status.err{color:#e8856b}
+
+  /* dashboard */
+  #dash{display:none}
+  .grid-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:14px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px}
+  .card .k{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+  .card .v{font-family:var(--mono);font-size:clamp(20px,3vw,27px);font-weight:600;margin-top:7px;letter-spacing:.01em}
+  .card .v small{font-size:13px;color:var(--faint);font-weight:400}
+  .card .meta{font-size:12px;color:var(--faint);margin-top:3px}
+
+  .panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:14px}
+  .panel h3{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--text);margin:0 0 4px;font-weight:600}
+  .panel .desc{color:var(--muted);font-size:12.5px;margin:0 0 16px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:720px){.two{grid-template-columns:1fr}}
+
+  /* heatmap */
+  .hm-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+  select{font-family:var(--mono);font-size:12px;background:var(--surface-2);color:var(--text);
+    border:1px solid var(--border);border-radius:8px;padding:6px 10px;cursor:pointer}
+  select:focus-visible{outline:2px solid var(--accent)}
+  .hm-scroll{overflow-x:auto;padding-bottom:6px}
+  .hm-legend{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:10px}
+  .hm-legend i{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .hm-cell{transition:filter .1s}
+  .hm-cell:hover{stroke:var(--text);stroke-width:1.2}
+
+  /* bars */
+  .bars{display:flex;flex-direction:column;gap:9px}
+  .bar-row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center}
+  .bar-label{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bar-label .tag{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .bar-track{grid-column:1 / -1;height:7px;background:var(--surface-2);border-radius:6px;overflow:hidden}
+  .bar-fill{height:100%;border-radius:6px;background:linear-gradient(90deg,var(--accent),var(--accent-soft))}
+  .bar-val{font-family:var(--mono);font-size:12px;color:var(--muted)}
+
+  /* composition */
+  .comp{display:flex;height:16px;border-radius:8px;overflow:hidden;margin-bottom:14px;border:1px solid var(--border)}
+  .comp span{height:100%}
+  .comp-key{display:flex;flex-wrap:wrap;gap:14px}
+  .comp-key div{display:flex;align-items:center;gap:7px;font-size:12.5px}
+  .comp-key i{width:10px;height:10px;border-radius:3px;display:inline-block}
+  .comp-key b{font-family:var(--mono);font-weight:600}
+  .comp-key small{color:var(--faint);font-family:var(--mono)}
+
+  /* daily chart */
+  .spark{width:100%;height:140px;display:block}
+  .axis{font-family:var(--mono);font-size:10px;fill:var(--faint)}
+
+  table.models{width:100%;border-collapse:collapse;font-size:13px}
+  table.models th{text-align:left;font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:500;padding:0 8px 8px;border-bottom:1px solid var(--border)}
+  table.models td{padding:9px 8px;border-bottom:1px solid var(--surface-2)}
+  table.models td.n{font-family:var(--mono);text-align:right;color:var(--text)}
+  table.models tr:last-child td{border-bottom:none}
+  .mdot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;vertical-align:middle}
+
+  .tooltip{position:fixed;pointer-events:none;background:#04060a;border:1px solid var(--border);
+    border-radius:8px;padding:8px 11px;font-size:12px;z-index:50;opacity:0;transition:opacity .1s;max-width:240px;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+  .tooltip b{font-family:var(--mono);color:var(--accent-soft)}
+  .tooltip .d{color:var(--muted);font-family:var(--mono);font-size:11px}
+
+  footer{margin-top:30px;color:var(--faint);font-size:12px;font-family:var(--mono);text-align:center;line-height:1.7}
+  footer a{color:var(--muted)}
+  .synccard{display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap;align-items:center;
+    background:linear-gradient(180deg,#191512,var(--surface));border:1px solid var(--border);
+    border-radius:var(--radius);padding:16px 18px;margin-bottom:14px}
+  .synccard .k{font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--accent)}
+  .synccard .wsval{font-family:var(--mono);font-size:20px;letter-spacing:.08em;margin-top:5px;display:flex;gap:10px;align-items:baseline}
+  .synccard .wsfull{margin-top:7px}
+  .synccard .wsfull code{font-family:var(--mono);font-size:13px;color:var(--accent-soft);word-break:break-all;background:#0f0c0a;padding:4px 8px;border-radius:6px;display:inline-block}
+  .syncnote{font-size:12px;color:var(--muted);margin:9px 0 0;max-width:48ch;line-height:1.5}
+  .syncnote b{color:var(--text)}
+  .syncbtns{display:flex;flex-direction:column;gap:9px;align-items:flex-end}
+  .lnk{background:none;border:none;color:var(--muted);font-family:var(--mono);font-size:12px;text-decoration:underline;cursor:pointer;padding:0}
+  .lnk:hover{color:var(--accent-soft)}
+  .syncbar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-family:var(--mono);font-size:12px;color:var(--muted);
+    background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:9px 13px;margin-bottom:14px}
+  .syncbar .dot{width:8px;height:8px;border-radius:50%;background:#5ec27a;box-shadow:0 0 8px #5ec27a;flex:none}
+  .syncmsg{color:var(--accent-soft)}
+  .note{font-size:12px;color:var(--faint);margin-top:10px;line-height:1.6}
+  .priceedit{font-family:var(--mono);font-size:11px;color:var(--faint);background:none;border:none;text-decoration:underline;cursor:pointer;padding:0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="app">
+    <div>
+      <p class="eyebrow">telemetria local · claude code</p>
+      <h1>Onde foram<span class="dim"> seus tokens</span></h1>
+      <p class="sub">Tudo é processado no seu navegador. Nenhum log sai do seu dispositivo — nada é enviado pra servidor nenhum.</p>
+    </div>
+    <button class="ghost-btn" id="resetBtn" style="display:none">↺ trocar arquivos</button>
+  </header>
+
+  <!-- INTAKE -->
+  <section id="intake">
+    <div class="synccard">
+      <div>
+        <div class="k">CÓDIGO DE SINCRONIZAÇÃO</div>
+        <div class="wsval"><span class="wsMask"></span><button class="lnk revealWS">ver completo</button></div>
+        <div class="wsfull" style="display:none"><code class="wsCode"></code></div>
+        <p class="syncnote">Use o <b>mesmo código</b> nos outros aparelhos pra juntar tudo num lugar só. Guarde ele — é a chave dos seus dados na nuvem.</p>
+      </div>
+      <div class="syncbtns">
+        <button class="btn sec copyWS">copiar código</button>
+        <button class="lnk changeWS">tenho um código de outro aparelho</button>
+      </div>
+    </div>
+    <div class="drop" id="drop">
+      <h2>Solte os logs do Claude Code aqui</h2>
+      <p>Selecione a pasta <span class="path">~/.claude/projects</span> inteira (recomendado) ou arraste os arquivos <span class="path">.jsonl</span>. No Windows: <span class="path">C:\Users\SEU_USUARIO\.claude\projects</span>.</p>
+      <div class="actions">
+        <button class="btn primary" id="pickFolder">Escolher pasta projects</button>
+        <button class="btn sec" id="pickFiles">Escolher arquivos .jsonl</button>
+      </div>
+      <p class="hint">Dica: no terminal, <code>open ~/.claude/projects</code> (macOS) ou <code>explorer %USERPROFILE%\.claude\projects</code> (Windows) abre a pasta certa.</p>
+    </div>
+    <div class="status" id="status"></div>
+    <input type="file" id="folderInput" webkitdirectory directory multiple hidden />
+    <input type="file" id="filesInput" accept=".jsonl,.json" multiple hidden />
+  </section>
+
+  <!-- DASHBOARD -->
+  <section id="dash">
+    <div class="syncbar">
+      <span class="dot"></span> sincronizado na nuvem · código <button class="lnk revealWS"><span class="wsMask"></span></button>
+      <span class="syncmsg" id="syncMsg"></span>
+      <button class="lnk copyWS" style="margin-left:auto">copiar</button>
+    </div>
+    <div class="wsfull" style="display:none;margin:-6px 0 14px"><code class="wsCode"></code></div>
+    <div class="grid-cards" id="cards"></div>
+
+    <div class="panel">
+      <div class="hm-head">
+        <div>
+          <h3>Atividade por dia</h3>
+          <p class="desc" style="margin:0">Cada quadradinho é um dia. Quanto mais quente, mais tokens naquele dia.</p>
+        </div>
+        <select id="yearSel"></select>
+      </div>
+      <div class="hm-scroll"><div id="heatmap"></div></div>
+      <div class="hm-legend">
+        <span>menos</span>
+        <i style="background:var(--hm0)"></i><i style="background:var(--hm1)"></i>
+        <i style="background:var(--hm2)"></i><i style="background:var(--hm3)"></i>
+        <i style="background:var(--hm4)"></i>
+        <span>mais</span>
+        <span id="hmTotal" style="margin-left:auto"></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Como você usou</h3>
+      <p class="desc">Composição dos tokens. Cache lido é barato e mostra reaproveitamento de contexto; saída é o que o modelo gerou.</p>
+      <div class="comp" id="comp"></div>
+      <div class="comp-key" id="compKey"></div>
+    </div>
+
+    <div class="two">
+      <div class="panel">
+        <h3>Onde você usou</h3>
+        <p class="desc">Tokens por projeto (pasta de trabalho). Passe o mouse pra ver o caminho completo.</p>
+        <div class="bars" id="projects"></div>
+      </div>
+      <div class="panel">
+        <h3>Volume diário</h3>
+        <p class="desc">Total de tokens por dia no período selecionado.</p>
+        <svg class="spark" id="spark" preserveAspectRatio="none"></svg>
+        <div id="sparkLabels" style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:4px"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Por modelo</h3>
+      <p class="desc">Quanto cada modelo consumiu e o custo equivalente em API (estimativa). <button class="priceedit" id="editPrice">ajustar preços</button></p>
+      <table class="models">
+        <thead><tr><th>Modelo</th><th style="text-align:right">Entrada</th><th style="text-align:right">Saída</th><th style="text-align:right">Cache</th><th style="text-align:right">Total tok</th><th style="text-align:right">Custo ~US$</th></tr></thead>
+        <tbody id="modelRows"></tbody>
+      </table>
+      <p class="note" id="costNote"></p>
+    </div>
+
+    <footer>
+      dados de <span id="rangeFoot"></span> · <span id="dedupFoot"></span><br/>
+      processado no seu navegador · sincroniza via código · roda offline como PWA
+    </footer>
+  </section>
+</div>
+
+<div class="tooltip" id="tip"></div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const nf = new Intl.NumberFormat('pt-BR');
+const cf = n => '$' + n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmtK = n => n>=1e9 ? (n/1e9).toFixed(2)+'B' : n>=1e6 ? (n/1e6).toFixed(2)+'M' : n>=1e3 ? (n/1e3).toFixed(1)+'k' : ''+n;
+
+// ----- nuvem (Supabase, tabela isolada cc_usage_events via RPC) -----
+const SUPA_URL='https://vqivrfewauphzyfnoeal.supabase.co';
+const SUPA_KEY='sb_publishable_JgCEVQhojxQE1IjWyg5Kow_ByjX936_';
+async function rpc(fn, body){
+  const r=await fetch(SUPA_URL+'/rest/v1/rpc/'+fn,{method:'POST',
+    headers:{apikey:SUPA_KEY,Authorization:'Bearer '+SUPA_KEY,'Content-Type':'application/json'},
+    body:JSON.stringify(body)});
+  if(!r.ok) throw new Error('HTTP '+r.status+' '+(await r.text()).slice(0,160));
+  return r.json();
+}
+function genWS(){ const a='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s='';
+  const arr=crypto.getRandomValues(new Uint8Array(24)); for(const b of arr) s+=a[b%a.length]; return s; }
+function getWS(){ let w=localStorage.getItem('cc_ws'); if(!w){ w=genWS(); localStorage.setItem('cc_ws',w); } return w; }
+function setWS(w){ localStorage.setItem('cc_ws',w); }
+function projLabel(p){ if(!p) return '(desconhecido)';
+  const seg=p.replace(/\\/g,'/').split('/').filter(Boolean); return seg.slice(-2).join('/')||p; }
+function recordsToEvents(records){ return records.map(r=>({id:r.id,
+  ts:(r.ts&&!isNaN(r.ts))?r.ts.toISOString():null, model:r.model, project:projLabel(r.proj),
+  input:r.inp, output:r.out, cw:r.cw, cr:r.cr})); }
+async function cloudIngest(events, onP){ let total=0; const N=700;
+  for(let i=0;i<events.length;i+=N){ const ins=await rpc('cc_ingest',{p_ws:getWS(),p_events:events.slice(i,i+N)});
+    total+=(+ins||0); if(onP) onP(Math.min(i+N,events.length),events.length); }
+  return total; }
+async function cloudSummary(){ return rpc('cc_summary',{p_ws:getWS()}); }
+function summaryToAgg(j){ return {
+  tot:{inp:j.tot.inp,out:j.tot.out,cw:j.tot.cw,cr:j.tot.cr},
+  msgs:j.tot.msgs, min:j.min?new Date(j.min):null, max:j.max?new Date(j.max):null,
+  days:new Map((j.days||[]).map(([d,tok,m])=>[d,{tok,msgs:m}])),
+  proj:new Map((j.proj||[]).map(([p,tok,m])=>[p,{tok,msgs:m}])),
+  model:new Map((j.model||[]).map(([mm,inp,out,cw,cr,m])=>[mm,{inp,out,cw,cr,msgs:m}])) }; }
+function renderWS(){ const w=getWS(); const mask=w.slice(0,4)+'····'+w.slice(-4);
+  document.querySelectorAll('.wsCode').forEach(el=>el.textContent=w);
+  document.querySelectorAll('.wsMask').forEach(el=>el.textContent=mask); }
+
+// ---- preços aproximados (US$ por 1M tokens). Editáveis pelo usuário. ----
+const DEFAULT_PRICES = {
+  // família : [entrada, saída, escrita_cache, leitura_cache]
+  'opus':   [15, 75, 18.75, 1.5],
+  'sonnet': [3, 15, 3.75, 0.30],
+  'haiku':  [0.80, 4, 1, 0.08],
+  'default':[3, 15, 3.75, 0.30]
+};
+let PRICES = JSON.parse(localStorage.getItem('cc_prices')||'null') || structuredClone(DEFAULT_PRICES);
+function priceFor(model){
+  const m=(model||'').toLowerCase();
+  if(m.includes('opus'))return PRICES.opus;
+  if(m.includes('haiku'))return PRICES.haiku;
+  if(m.includes('sonnet'))return PRICES.sonnet;
+  return PRICES.default;
+}
+
+// ---------- PARSER ----------
+function basename(p){ if(!p)return null; const parts=p.replace(/\\/g,'/').split('/').filter(Boolean); return parts[parts.length-1]||p; }
+
+function parseFiles(fileList, onDone, onProgress){
+  const files=[...fileList].filter(f=>/\.jsonl$|\.json$/i.test(f.name));
+  if(!files.length){ onDone(null,'Nenhum arquivo .jsonl encontrado. Selecione a pasta ~/.claude/projects.'); return; }
+  const records=[]; const seen=new Set(); let done=0; let badLines=0; let dupes=0;
+  let read=0; const total=files.length;
+
+  files.forEach(file=>{
+    const reader=new FileReader();
+    reader.onload=()=>{
+      const lines=reader.result.split('\n');
+      for(const line of lines){
+        const s=line.trim(); if(!s)continue;
+        let e; try{ e=JSON.parse(s); }catch{ badLines++; continue; }
+        const u = e && e.message && e.message.usage;
+        if(!u) continue;
+        const model = e.message.model || '';
+        if(model==='<synthetic>') continue;
+        // dedup como o ccusage: message.id + requestId
+        const id = e.message.id, req = e.requestId;
+        if(id && req){ const k=id+':'+req; if(seen.has(k)){dupes++;continue;} seen.add(k); }
+        const inp=+u.input_tokens||0, out=+u.output_tokens||0,
+              cw=+u.cache_creation_input_tokens||0, cr=+u.cache_read_input_tokens||0;
+        if(inp+out+cw+cr===0) continue;
+        const ts = e.timestamp ? new Date(e.timestamp) : null;
+        let proj = e.cwd || null;
+        if(!proj && file.webkitRelativePath){ const seg=file.webkitRelativePath.split('/'); proj = seg.length>1?seg[seg.length-2]:null; }
+        const did = (id&&req) ? id+':'+req : 'h:'+[e.timestamp||'',model,inp,out,cw,cr,(proj||'')].join('|');
+        records.push({id:did,ts,model,proj:proj||'(desconhecido)',inp,out,cw,cr});
+      }
+      read++; if(onProgress)onProgress(read,total);
+      if(read===total) finalize();
+    };
+    reader.onerror=()=>{ read++; if(read===total) finalize(); };
+    reader.readAsText(file);
+  });
+
+  function finalize(){
+    if(!records.length){ onDone(null,'Os arquivos foram lidos, mas não encontrei registros de uso (usage). Confirme que são os .jsonl do Claude Code.'); return; }
+    onDone({records,badLines,dupes}, null);
+  }
+}
+
+// ---------- AGGREGATE ----------
+function aggregate(records){
+  const A={tot:{inp:0,out:0,cw:0,cr:0},days:new Map(),proj:new Map(),model:new Map(),sessions:0};
+  let min=null,max=null;
+  for(const r of records){
+    A.tot.inp+=r.inp; A.tot.out+=r.out; A.tot.cw+=r.cw; A.tot.cr+=r.cr;
+    const all=r.inp+r.out+r.cw+r.cr;
+    if(r.ts && !isNaN(r.ts)){
+      const key=r.ts.toISOString().slice(0,10);
+      const d=A.days.get(key)||{tok:0,msgs:0}; d.tok+=all; d.msgs++; A.days.set(key,d);
+      if(!min||r.ts<min)min=r.ts; if(!max||r.ts>max)max=r.ts;
+    }
+    const p=A.proj.get(r.proj)||{tok:0,msgs:0}; p.tok+=all; p.msgs++; A.proj.set(r.proj,p);
+    const m=A.model.get(r.model)||{inp:0,out:0,cw:0,cr:0,msgs:0};
+    m.inp+=r.inp;m.out+=r.out;m.cw+=r.cw;m.cr+=r.cr;m.msgs++; A.model.set(r.model,m);
+  }
+  A.min=min; A.max=max; A.msgs=records.length;
+  return A;
+}
+
+// ---------- RENDER ----------
+const MODEL_COLORS=['#d97757','#6ea8fe','#7bc47f','#c084e0','#e0c06e','#5ec5c0'];
+let CUR; // current aggregate
+
+function fmtDatePT(d){ return d.toLocaleDateString('pt-BR',{day:'2-digit',month:'short',year:'numeric'}); }
+
+function render(A){
+  CUR=A;
+  // CARDS
+  const totTok=A.tot.inp+A.tot.out+A.tot.cw+A.tot.cr;
+  let cost=0; for(const [model,m] of A.model){ const p=priceFor(model);
+    cost += m.inp/1e6*p[0]+m.out/1e6*p[1]+m.cw/1e6*p[2]+m.cr/1e6*p[3]; }
+  const span = (A.min&&A.max)? Math.max(1,Math.round((A.max-A.min)/864e5)+1):0;
+  const cards=[
+    {k:'Tokens totais',v:fmtK(totTok),meta:nf.format(totTok)+' tokens'},
+    {k:'Custo equiv. (API)',v:cf(cost),meta:'estimativa, não é cobrança real'},
+    {k:'Mensagens',v:nf.format(A.msgs),meta:A.days.size+' dias ativos'},
+    {k:'Projetos',v:nf.format(A.proj.size),meta:'pastas distintas'},
+    {k:'Modelos',v:nf.format(A.model.size),meta:'usados no período'},
+    {k:'Período',v:span+'<small> dias</small>',meta:A.min?fmtDatePT(A.min)+' →':''+''},
+  ];
+  $('#cards').innerHTML=cards.map(c=>`<div class="card"><div class="k">${c.k}</div><div class="v">${c.v}</div><div class="meta">${c.meta}</div></div>`).join('');
+
+  // COMPOSITION
+  const comp=[
+    {label:'Cache lido',val:A.tot.cr,color:'#3d6a52'},
+    {label:'Entrada',val:A.tot.inp,color:'#6ea8fe'},
+    {label:'Escrita cache',val:A.tot.cw,color:'#b08a3e'},
+    {label:'Saída',val:A.tot.out,color:'#d97757'},
+  ];
+  $('#comp').innerHTML=comp.map(c=>`<span style="width:${totTok?(c.val/totTok*100):0}%;background:${c.color}"></span>`).join('');
+  $('#compKey').innerHTML=comp.map(c=>`<div><i style="background:${c.color}"></i><span>${c.label}</span> <b>${fmtK(c.val)}</b> <small>${totTok?(c.val/totTok*100).toFixed(1):0}%</small></div>`).join('');
+
+  // PROJECTS
+  const projs=[...A.proj.entries()].sort((a,b)=>b[1].tok-a[1].tok).slice(0,12);
+  const pmax=projs.length?projs[0][1].tok:1;
+  $('#projects').innerHTML=projs.map(([name,d])=>`
+    <div>
+      <div class="bar-row"><div class="bar-label" title="${name.replace(/"/g,'&quot;')}">${basename(name)} <span class="tag">${d.msgs} msgs</span></div><div class="bar-val">${fmtK(d.tok)}</div></div>
+      <div class="bar-track"><div class="bar-fill" style="width:${d.tok/pmax*100}%"></div></div>
+    </div>`).join('') || '<p class="desc">Sem dados de projeto.</p>';
+
+  // MODELS TABLE
+  const models=[...A.model.entries()].sort((a,b)=>(b[1].inp+b[1].out+b[1].cw+b[1].cr)-(a[1].inp+a[1].out+a[1].cw+a[1].cr));
+  $('#modelRows').innerHTML=models.map(([name,m],i)=>{
+    const p=priceFor(name); const c=m.inp/1e6*p[0]+m.out/1e6*p[1]+m.cw/1e6*p[2]+m.cr/1e6*p[3];
+    const tt=m.inp+m.out+m.cw+m.cr; const col=MODEL_COLORS[i%MODEL_COLORS.length];
+    return `<tr><td><span class="mdot" style="background:${col}"></span>${name||'(desconhecido)'}</td>
+      <td class="n">${fmtK(m.inp)}</td><td class="n">${fmtK(m.out)}</td><td class="n">${fmtK(m.cw+m.cr)}</td>
+      <td class="n">${fmtK(tt)}</td><td class="n">${cf(c)}</td></tr>`;
+  }).join('');
+  $('#costNote').textContent='Preços usados (US$/1M): Opus '+PRICES.opus.join('/')+' · Sonnet '+PRICES.sonnet.join('/')+' · Haiku '+PRICES.haiku.join('/')+'  (entrada/saída/escrita-cache/leitura-cache). Assinaturas Pro/Max têm valor fixo — isso aqui é só o equivalente se fosse pago por API.';
+
+  // YEAR SELECT + HEATMAP
+  buildYearSelect(A);
+  drawHeatmap(A, $('#yearSel').value);
+
+  $('#rangeFoot').textContent = A.min? fmtDatePT(A.min)+' a '+fmtDatePT(A.max):'período desconhecido';
+  $('#dedupFoot').textContent = nf.format(A.msgs)+' registros';
+}
+
+function buildYearSelect(A){
+  const years=new Set(); for(const k of A.days.keys()) years.add(k.slice(0,4));
+  const arr=[...years].sort();
+  const sel=$('#yearSel');
+  let opts='<option value="rolling">Últimos 12 meses</option>';
+  for(const y of arr.reverse()) opts+=`<option value="${y}">${y}</option>`;
+  sel.innerHTML=opts; sel.value='rolling';
+}
+
+function drawHeatmap(A, mode){
+  let start,end;
+  if(mode==='rolling'){
+    end = A.max && !isNaN(A.max) ? new Date(A.max) : new Date();
+    start = new Date(end); start.setDate(start.getDate()-364);
+  } else {
+    start = new Date(mode+'-01-01T00:00:00');
+    end = new Date(mode+'-12-31T00:00:00');
+  }
+  // alinhar início no domingo
+  const gridStart=new Date(start); gridStart.setDate(gridStart.getDate()-gridStart.getDay());
+  const cell=12, gap=3, step=cell+gap, topPad=18, leftPad=28;
+  const weeks=Math.ceil(((end-gridStart)/864e5+1)/7);
+  const W=leftPad+weeks*step+4, H=topPad+7*step;
+  const vals=[...A.days.values()].map(d=>d.tok).filter(v=>v>0).sort((a,b)=>a-b);
+  const q=p=> vals.length? vals[Math.min(vals.length-1,Math.floor(p*vals.length))] : 0;
+  const t1=q(.25),t2=q(.5),t3=q(.75);
+  const colorFor=v=> v<=0?'var(--hm0)': v<=t1?'var(--hm1)': v<=t2?'var(--hm2)': v<=t3?'var(--hm3)':'var(--hm4)';
+  const months=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+
+  let rects='', mlabels='', periodTot=0, lastMonth=-1;
+  for(let w=0; w<weeks; w++){
+    for(let dow=0; dow<7; dow++){
+      const day=new Date(gridStart); day.setDate(day.getDate()+w*7+dow);
+      if(day<start||day>end) continue;
+      const key=day.toISOString().slice(0,10);
+      const d=A.days.get(key); const v=d?d.tok:0; periodTot+=v;
+      const x=leftPad+w*step, y=topPad+dow*step;
+      rects+=`<rect class="hm-cell" x="${x}" y="${y}" width="${cell}" height="${cell}" rx="2.5" ry="2.5" fill="${colorFor(v)}" data-d="${key}" data-t="${v}" data-m="${d?d.msgs:0}"></rect>`;
+      if(dow===0){ const mo=day.getMonth(); if(mo!==lastMonth){ mlabels+=`<text class="axis" x="${x}" y="12">${months[mo]}</text>`; lastMonth=mo; } }
+    }
+  }
+  const wd=['','seg','','qua','','sex',''];
+  let wdl=''; for(let i=0;i<7;i++) if(wd[i]) wdl+=`<text class="axis" x="0" y="${topPad+i*step+cell-1}">${wd[i]}</text>`;
+  $('#heatmap').innerHTML=`<svg width="${W}" height="${H}" role="img" aria-label="Mapa de calor de uso diário">${mlabels}${wdl}${rects}</svg>`;
+  $('#hmTotal').textContent=fmtK(periodTot)+' tokens no período';
+  attachHeatTips();
+  drawSpark(A,start,end);
+}
+
+function attachHeatTips(){
+  const tip=$('#tip');
+  $('#heatmap').querySelectorAll('.hm-cell').forEach(c=>{
+    c.addEventListener('mousemove',e=>{
+      const t=+c.dataset.t, m=+c.dataset.m, day=new Date(c.dataset.d+'T00:00:00');
+      tip.innerHTML=`<b>${fmtK(t)} tokens</b> · ${m} msg${m===1?'':'s'}<br><span class="d">${day.toLocaleDateString('pt-BR',{weekday:'long',day:'2-digit',month:'long',year:'numeric'})}</span>`;
+      tip.style.opacity=1;
+      let x=e.clientX+14, y=e.clientY+14;
+      if(x+250>innerWidth)x=e.clientX-250; if(y+60>innerHeight)y=e.clientY-60;
+      tip.style.left=x+'px'; tip.style.top=y+'px';
+    });
+    c.addEventListener('mouseleave',()=>tip.style.opacity=0);
+  });
+}
+
+function drawSpark(A,start,end){
+  const days=[]; const cur=new Date(start);
+  while(cur<=end){ const key=cur.toISOString().slice(0,10); const d=A.days.get(key);
+    days.push({date:new Date(cur),v:d?d.tok:0}); cur.setDate(cur.getDate()+1); }
+  const max=Math.max(1,...days.map(d=>d.v));
+  const W=600,H=140,pad=4;
+  const bw=W/days.length;
+  let bars='';
+  days.forEach((d,i)=>{ const h=d.v/max*(H-pad*2); bars+=`<rect x="${i*bw}" y="${H-pad-h}" width="${Math.max(0.6,bw-0.6)}" height="${h}" fill="${d.v?'var(--accent)':'transparent'}" opacity="${d.v?.85:0}"></rect>`; });
+  $('#spark').setAttribute('viewBox',`0 0 ${W} ${H}`);
+  $('#spark').innerHTML=bars;
+  const lab=$('#sparkLabels');
+  if(days.length){ lab.innerHTML=`<span>${days[0].date.toLocaleDateString('pt-BR',{day:'2-digit',month:'short'})}</span><span>pico: ${fmtK(max)}/dia</span><span>${days[days.length-1].date.toLocaleDateString('pt-BR',{day:'2-digit',month:'short'})}</span>`; }
+}
+
+// ---------- UI WIRING ----------
+function showDash(){ $('#intake').style.display='none'; $('#dash').style.display='block'; $('#resetBtn').style.display='inline-block'; }
+function showIntake(){ $('#intake').style.display='block'; $('#dash').style.display='none'; $('#resetBtn').style.display='none'; $('#status').textContent=''; }
+
+function setStatus(t,err){ const s=$('#status'); s.className='status'+(err?' err':''); s.textContent=t||''; }
+function flashSync(msg){ const el=$('#syncMsg'); if(el) el.textContent=msg||''; }
+
+function handle(fileList){
+  setStatus('Lendo arquivos…');
+  parseFiles(fileList, async (res,err)=>{
+    if(err){ setStatus(err,true); return; }
+    try{
+      const events=recordsToEvents(res.records);
+      setStatus('Enviando pra nuvem… 0/'+events.length);
+      const inserted=await cloudIngest(events,(d,t)=>setStatus('Enviando pra nuvem… '+d+'/'+t));
+      setStatus('Atualizando do servidor…');
+      const j=await cloudSummary();
+      try{ localStorage.setItem('cc_cache',JSON.stringify(j)); }catch{}
+      render(summaryToAgg(j)); showDash(); window.scrollTo({top:0,behavior:'smooth'});
+      flashSync(inserted ? ('+'+nf.format(inserted)+' novos eventos salvos') : 'tudo já estava salvo');
+    }catch(e){
+      setStatus('Nuvem indisponível ('+e.message+'). Mostrando só este aparelho — tente enviar de novo quando voltar a conexão.',true);
+      render(aggregate(res.records)); showDash();
+    }
+  },(r,t)=>setStatus('Processando arquivos… '+r+'/'+t));
+}
+
+$('#pickFolder').onclick=()=>$('#folderInput').click();
+$('#pickFiles').onclick=()=>$('#filesInput').click();
+$('#folderInput').onchange=e=>handle(e.target.files);
+$('#filesInput').onchange=e=>handle(e.target.files);
+$('#yearSel').onchange=()=>drawHeatmap(CUR,$('#yearSel').value);
+$('#resetBtn').onclick=()=>{ showIntake(); };
+
+// código de sincronização
+document.querySelectorAll('.copyWS').forEach(b=>b.onclick=async()=>{
+  try{ await navigator.clipboard.writeText(getWS()); const o=b.textContent; b.textContent='copiado!'; setTimeout(()=>b.textContent=o,1500);}catch{}
+});
+document.querySelectorAll('.revealWS').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.wsfull').forEach(el=>el.style.display = el.style.display==='none'?'block':'none');
+});
+document.querySelectorAll('.changeWS').forEach(b=>b.onclick=()=>{
+  const v=prompt('Cole o código de sincronização de outro aparelho:\n(deixe em branco e cancele pra manter o atual)',getWS());
+  if(v===null) return; const c=v.trim().toUpperCase();
+  if(c.length>=8){ setWS(c); localStorage.removeItem('cc_cache'); location.reload(); }
+  else alert('Código muito curto.');
+});
+
+$('#editPrice').onclick=()=>{
+  const cur=PRICES.sonnet.join(',');
+  const v=prompt('Preço Sonnet US$/1M (entrada,saída,escrita-cache,leitura-cache):',cur);
+  if(!v)return; const a=v.split(',').map(Number); if(a.length===4&&a.every(n=>!isNaN(n))){ PRICES.sonnet=a;
+    localStorage.setItem('cc_prices',JSON.stringify(PRICES)); render(CUR); }
+};
+
+// drag & drop (inclui pastas via webkitGetAsEntry)
+const drop=$('#drop');
+['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('drag');}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('drag');}));
+drop.addEventListener('drop',async e=>{
+  const items=e.dataTransfer.items;
+  if(items && items.length && items[0].webkitGetAsEntry){
+    const files=[]; const ps=[];
+    for(const it of items){ const en=it.webkitGetAsEntry(); if(en) ps.push(walk(en,files)); }
+    await Promise.all(ps); handle(files);
+  } else handle(e.dataTransfer.files);
+});
+function walk(entry,out){
+  return new Promise(res=>{
+    if(entry.isFile){ entry.file(f=>{out.push(f);res();},()=>res()); }
+    else if(entry.isDirectory){ const rd=entry.createReader(); const all=[];
+      const read=()=>rd.readEntries(es=>{ if(!es.length){ Promise.all(all.map(c=>walk(c,out))).then(res); }
+        else { all.push(...es); read(); } },()=>res());
+      read(); }
+    else res();
+  });
+}
+
+// restaura: tenta nuvem primeiro, depois cache local offline
+(async function restore(){
+  renderWS();
+  if(navigator.onLine){
+    try{ const j=await cloudSummary();
+      if(j&&j.tot&&j.tot.msgs>0){ localStorage.setItem('cc_cache',JSON.stringify(j));
+        render(summaryToAgg(j)); showDash(); return; } }
+    catch{}
+  }
+  const cached=localStorage.getItem('cc_cache');
+  if(cached){ try{ const j=JSON.parse(cached); if(j.tot&&j.tot.msgs>0){ render(summaryToAgg(j)); showDash(); return; } }catch{} }
+  showIntake();
+})();
+
+// service worker
+if('serviceWorker' in navigator){ window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{})); }
+</script>
+</body>
+</html>
