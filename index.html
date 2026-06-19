@@ -82,8 +82,28 @@
   .hm-scroll{overflow-x:auto;padding-bottom:6px}
   .hm-legend{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:10px}
   .hm-legend i{width:11px;height:11px;border-radius:3px;display:inline-block}
-  .hm-cell{transition:filter .1s}
+  .hm-cell{transition:filter .1s;fill:var(--hm0)}
+  .hm-cell.l1{fill:var(--hm1)} .hm-cell.l2{fill:var(--hm2)}
+  .hm-cell.l3{fill:var(--hm3)} .hm-cell.l4{fill:var(--hm4)}
   .hm-cell:hover{stroke:var(--text);stroke-width:1.2}
+  #spark rect{fill:var(--accent)}
+
+  /* insights chips */
+  .chips{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin-bottom:14px}
+  .chip{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;display:flex;gap:12px;align-items:center}
+  .chip .ico{font-size:20px;line-height:1;filter:saturate(.9)}
+  .chip .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  .chip .v{font-family:var(--mono);font-size:15px;font-weight:600;margin-top:3px}
+  .chip .v small{color:var(--faint);font-weight:400;font-size:12px}
+
+  /* weekday */
+  .wk{display:flex;gap:10px;align-items:flex-end;height:120px}
+  .wk .col{flex:1;display:flex;flex-direction:column;align-items:center;gap:7px;height:100%}
+  .wk .barwrap{flex:1;width:100%;display:flex;align-items:flex-end}
+  .wk .bar{width:100%;background:linear-gradient(180deg,var(--accent-soft),var(--accent));border-radius:6px 6px 0 0;min-height:2px;transition:.2s}
+  .wk .bar.peak{box-shadow:0 0 0 1px var(--accent-soft) inset, 0 0 14px rgba(217,119,87,.4)}
+  .wk .lbl{font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .wk .val{font-family:var(--mono);font-size:10px;color:var(--faint)}
 
   /* bars */
   .bars{display:flex;flex-direction:column;gap:9px}
@@ -163,7 +183,8 @@
       </div>
       <div class="syncbtns">
         <button class="btn sec copyWS">copiar código</button>
-        <button class="lnk changeWS">tenho um código de outro aparelho</button>
+        <button class="lnk mergeWS">juntar dados de outro código</button>
+        <button class="lnk changeWS">usar um código já existente</button>
       </div>
     </div>
     <div class="drop" id="drop">
@@ -185,10 +206,13 @@
     <div class="syncbar">
       <span class="dot"></span> sincronizado na nuvem · código <button class="lnk revealWS"><span class="wsMask"></span></button>
       <span class="syncmsg" id="syncMsg"></span>
-      <button class="lnk copyWS" style="margin-left:auto">copiar</button>
+      <button class="lnk mergeWS" style="margin-left:auto">juntar outro código</button>
+      <button class="lnk" id="exportBtn">exportar backup</button>
+      <button class="lnk copyWS">copiar</button>
     </div>
     <div class="wsfull" style="display:none;margin:-6px 0 14px"><code class="wsCode"></code></div>
     <div class="grid-cards" id="cards"></div>
+    <div class="chips" id="insights"></div>
 
     <div class="panel">
       <div class="hm-head">
@@ -196,7 +220,13 @@
           <h3>Atividade por dia</h3>
           <p class="desc" style="margin:0">Cada quadradinho é um dia. Quanto mais quente, mais tokens naquele dia.</p>
         </div>
-        <select id="yearSel"></select>
+        <div style="display:flex;gap:8px">
+          <select id="palSel" title="Paleta de cores">
+            <option value="amber">Âmbar</option>
+            <option value="github">Verde (GitHub)</option>
+          </select>
+          <select id="yearSel"></select>
+        </div>
       </div>
       <div class="hm-scroll"><div id="heatmap"></div></div>
       <div class="hm-legend">
@@ -214,6 +244,7 @@
       <p class="desc">Composição dos tokens. Cache lido é barato e mostra reaproveitamento de contexto; saída é o que o modelo gerou.</p>
       <div class="comp" id="comp"></div>
       <div class="comp-key" id="compKey"></div>
+      <p class="note" id="cacheNote"></p>
     </div>
 
     <div class="two">
@@ -228,6 +259,12 @@
         <svg class="spark" id="spark" preserveAspectRatio="none"></svg>
         <div id="sparkLabels" style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--faint);margin-top:4px"></div>
       </div>
+    </div>
+
+    <div class="panel">
+      <h3>Padrão por dia da semana</h3>
+      <p class="desc">Soma de tokens por dia da semana, em todo o período. Mostra quando você mais coda.</p>
+      <div class="wk" id="weekday"></div>
     </div>
 
     <div class="panel">
@@ -280,6 +317,7 @@ async function cloudIngest(events, onP){ let total=0; const N=700;
     total+=(+ins||0); if(onP) onP(Math.min(i+N,events.length),events.length); }
   return total; }
 async function cloudSummary(){ return rpc('cc_summary',{p_ws:getWS()}); }
+async function cloudMerge(fromCode){ return rpc('cc_merge',{p_into:getWS(),p_from:fromCode}); }
 function summaryToAgg(j){ return {
   tot:{inp:j.tot.inp,out:j.tot.out,cw:j.tot.cw,cr:j.tot.cr},
   msgs:j.tot.msgs, min:j.min?new Date(j.min):null, max:j.max?new Date(j.max):null,
@@ -289,6 +327,52 @@ function summaryToAgg(j){ return {
 function renderWS(){ const w=getWS(); const mask=w.slice(0,4)+'····'+w.slice(-4);
   document.querySelectorAll('.wsCode').forEach(el=>el.textContent=w);
   document.querySelectorAll('.wsMask').forEach(el=>el.textContent=mask); }
+
+const PALETTES={
+  amber:['#171a1f','#4a2a20','#8a4129','#c0623c','#f0a584'],
+  github:['#161b22','#0e4429','#006d32','#26a641','#39d353']
+};
+function applyPalette(name){ const p=PALETTES[name]||PALETTES.amber; const r=document.documentElement.style;
+  p.forEach((c,i)=>r.setProperty('--hm'+i,c)); localStorage.setItem('cc_pal',name); }
+
+function renderInsights(A, totTok, cacheSavings){
+  let top=null; for(const [k,d] of A.days){ if(!top||d.tok>top.tok) top={k,tok:d.tok}; }
+  const keys=[...A.days.keys()].sort(); const set=new Set(keys);
+  let longest=0,prev=null,run=0;
+  for(const k of keys){ const d=new Date(k+'T00:00:00');
+    if(prev&&(d-prev)===864e5) run++; else run=1; prev=d; longest=Math.max(longest,run); }
+  let cur=0; if(keys.length){ let d=new Date(keys[keys.length-1]+'T00:00:00');
+    while(set.has(d.toISOString().slice(0,10))){ cur++; d.setDate(d.getDate()-1); } }
+  const avg = A.days.size? totTok/A.days.size : 0;
+  const crPct = totTok? (A.tot.cr/totTok*100):0;
+  const chips=[
+    {ico:'🔥',k:'Dia mais intenso',v: top? fmtK(top.tok)+' <small>'+new Date(top.k+'T00:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'short'})+'</small>':'—'},
+    {ico:'⚡',k:'Sequência de dias',v: cur+' <small>atual · recorde '+longest+'</small>'},
+    {ico:'♻️',k:'Eficiência de cache',v: crPct.toFixed(0)+'% <small>~'+cf(cacheSavings)+' economiz.</small>'},
+    {ico:'📊',k:'Média por dia ativo',v: fmtK(Math.round(avg))+' <small>tokens</small>'},
+  ];
+  $('#insights').innerHTML=chips.map(c=>`<div class="chip"><span class="ico">${c.ico}</span><div><div class="k">${c.k}</div><div class="v">${c.v}</div></div></div>`).join('');
+}
+
+function renderWeekday(A){
+  const names=['Dom','Seg','Ter','Qua','Qui','Sex','Sáb']; const wd=[0,0,0,0,0,0,0];
+  for(const [k,d] of A.days){ wd[new Date(k+'T00:00:00').getDay()]+=d.tok; }
+  const max=Math.max(1,...wd);
+  $('#weekday').innerHTML=wd.map((v,i)=>`<div class="col">
+    <div class="val">${v?fmtK(v):''}</div>
+    <div class="barwrap"><div class="bar ${(v===max&&v>0)?'peak':''}" style="height:${v/max*100}%"></div></div>
+    <div class="lbl">${names[i]}</div></div>`).join('');
+}
+
+function exportJSON(){
+  let blobData=localStorage.getItem('cc_cache');
+  if(!blobData && CUR) blobData=JSON.stringify({tot:CUR.tot,min:CUR.min,max:CUR.max,days:[...CUR.days],proj:[...CUR.proj],model:[...CUR.model]});
+  if(!blobData) return;
+  const blob=new Blob([blobData],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download='claude-usage-'+new Date().toISOString().slice(0,10)+'.json'; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
 
 // ---- preços aproximados (US$ por 1M tokens). Editáveis pelo usuário. ----
 const DEFAULT_PRICES = {
@@ -382,8 +466,9 @@ function render(A){
   CUR=A;
   // CARDS
   const totTok=A.tot.inp+A.tot.out+A.tot.cw+A.tot.cr;
-  let cost=0; for(const [model,m] of A.model){ const p=priceFor(model);
-    cost += m.inp/1e6*p[0]+m.out/1e6*p[1]+m.cw/1e6*p[2]+m.cr/1e6*p[3]; }
+  let cost=0, cacheSavings=0; for(const [model,m] of A.model){ const p=priceFor(model);
+    cost += m.inp/1e6*p[0]+m.out/1e6*p[1]+m.cw/1e6*p[2]+m.cr/1e6*p[3];
+    cacheSavings += m.cr/1e6*(p[0]-p[3]); }
   const span = (A.min&&A.max)? Math.max(1,Math.round((A.max-A.min)/864e5)+1):0;
   const cards=[
     {k:'Tokens totais',v:fmtK(totTok),meta:nf.format(totTok)+' tokens'},
@@ -404,6 +489,10 @@ function render(A){
   ];
   $('#comp').innerHTML=comp.map(c=>`<span style="width:${totTok?(c.val/totTok*100):0}%;background:${c.color}"></span>`).join('');
   $('#compKey').innerHTML=comp.map(c=>`<div><i style="background:${c.color}"></i><span>${c.label}</span> <b>${fmtK(c.val)}</b> <small>${totTok?(c.val/totTok*100).toFixed(1):0}%</small></div>`).join('');
+  const crPct = totTok? (A.tot.cr/totTok*100):0;
+  $('#cacheNote').textContent='Leitura de cache foi '+crPct.toFixed(1)+'% dos seus tokens. Reaproveitar contexto via cache te economizou ~'+cf(cacheSavings)+' frente a reprocessar tudo como entrada nova.';
+  renderInsights(A, totTok, cacheSavings);
+  renderWeekday(A);
 
   // PROJECTS
   const projs=[...A.proj.entries()].sort((a,b)=>b[1].tok-a[1].tok).slice(0,12);
@@ -459,7 +548,7 @@ function drawHeatmap(A, mode){
   const vals=[...A.days.values()].map(d=>d.tok).filter(v=>v>0).sort((a,b)=>a-b);
   const q=p=> vals.length? vals[Math.min(vals.length-1,Math.floor(p*vals.length))] : 0;
   const t1=q(.25),t2=q(.5),t3=q(.75);
-  const colorFor=v=> v<=0?'var(--hm0)': v<=t1?'var(--hm1)': v<=t2?'var(--hm2)': v<=t3?'var(--hm3)':'var(--hm4)';
+  const lvlFor=v=> v<=0?0: v<=t1?1: v<=t2?2: v<=t3?3:4;
   const months=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
 
   let rects='', mlabels='', periodTot=0, lastMonth=-1;
@@ -470,7 +559,7 @@ function drawHeatmap(A, mode){
       const key=day.toISOString().slice(0,10);
       const d=A.days.get(key); const v=d?d.tok:0; periodTot+=v;
       const x=leftPad+w*step, y=topPad+dow*step;
-      rects+=`<rect class="hm-cell" x="${x}" y="${y}" width="${cell}" height="${cell}" rx="2.5" ry="2.5" fill="${colorFor(v)}" data-d="${key}" data-t="${v}" data-m="${d?d.msgs:0}"></rect>`;
+      rects+=`<rect class="hm-cell l${lvlFor(v)}" x="${x}" y="${y}" width="${cell}" height="${cell}" rx="2.5" ry="2.5" data-d="${key}" data-t="${v}" data-m="${d?d.msgs:0}"></rect>`;
       if(dow===0){ const mo=day.getMonth(); if(mo!==lastMonth){ mlabels+=`<text class="axis" x="${x}" y="12">${months[mo]}</text>`; lastMonth=mo; } }
     }
   }
@@ -505,7 +594,7 @@ function drawSpark(A,start,end){
   const W=600,H=140,pad=4;
   const bw=W/days.length;
   let bars='';
-  days.forEach((d,i)=>{ const h=d.v/max*(H-pad*2); bars+=`<rect x="${i*bw}" y="${H-pad-h}" width="${Math.max(0.6,bw-0.6)}" height="${h}" fill="${d.v?'var(--accent)':'transparent'}" opacity="${d.v?.85:0}"></rect>`; });
+  days.forEach((d,i)=>{ const h=d.v/max*(H-pad*2); bars+=`<rect x="${i*bw}" y="${H-pad-h}" width="${Math.max(0.6,bw-0.6)}" height="${h}" opacity="${d.v?.85:0}"></rect>`; });
   $('#spark').setAttribute('viewBox',`0 0 ${W} ${H}`);
   $('#spark').innerHTML=bars;
   const lab=$('#sparkLabels');
@@ -546,6 +635,11 @@ $('#filesInput').onchange=e=>handle(e.target.files);
 $('#yearSel').onchange=()=>drawHeatmap(CUR,$('#yearSel').value);
 $('#resetBtn').onclick=()=>{ showIntake(); };
 
+applyPalette(localStorage.getItem('cc_pal')||'amber');
+$('#palSel').value=localStorage.getItem('cc_pal')||'amber';
+$('#palSel').onchange=e=>applyPalette(e.target.value);
+$('#exportBtn').onclick=exportJSON;
+
 // código de sincronização
 document.querySelectorAll('.copyWS').forEach(b=>b.onclick=async()=>{
   try{ await navigator.clipboard.writeText(getWS()); const o=b.textContent; b.textContent='copiado!'; setTimeout(()=>b.textContent=o,1500);}catch{}
@@ -558,6 +652,20 @@ document.querySelectorAll('.changeWS').forEach(b=>b.onclick=()=>{
   if(v===null) return; const c=v.trim().toUpperCase();
   if(c.length>=8){ setWS(c); localStorage.removeItem('cc_cache'); location.reload(); }
   else alert('Código muito curto.');
+});
+document.querySelectorAll('.mergeWS').forEach(b=>b.onclick=async()=>{
+  const v=prompt('Cole o código do OUTRO aparelho.\nOs dados dele serão somados a ESTE código ('+getWS().slice(0,4)+'····'+getWS().slice(-4)+').');
+  if(v===null) return; const c=v.trim().toUpperCase();
+  if(c.length<8){ alert('Código muito curto.'); return; }
+  if(c===getWS()){ alert('Esse já é o código atual.'); return; }
+  try{
+    setStatus('Juntando dados de '+c.slice(0,4)+'…');
+    const moved=await cloudMerge(c);
+    const j=await cloudSummary(); try{ localStorage.setItem('cc_cache',JSON.stringify(j)); }catch{}
+    render(summaryToAgg(j)); showDash(); window.scrollTo({top:0,behavior:'smooth'});
+    flashSync(moved ? ('+'+nf.format(moved)+' eventos juntados') : 'nada novo pra juntar');
+    setStatus('');
+  }catch(e){ setStatus('Falha ao juntar: '+e.message,true); }
 });
 
 $('#editPrice').onclick=()=>{
