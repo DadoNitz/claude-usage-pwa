@@ -158,7 +158,25 @@
   .syncbar .dot{width:8px;height:8px;border-radius:50%;background:#5ec27a;box-shadow:0 0 8px #5ec27a;flex:none}
   .syncmsg{color:var(--accent-soft)}
   .note{font-size:12px;color:var(--faint);margin-top:10px;line-height:1.6}
-  .priceedit{font-family:var(--mono);font-size:11px;color:var(--faint);background:none;border:none;text-decoration:underline;cursor:pointer;padding:0}
+  .priceedit{font-family:var(--mono);font-size:11px;color:var(--faint);background:none;border:none;text-decoration:underline;cursor:pointer;padding:0;margin-left:6px}
+
+  /* limites de uso */
+  .limit-row{margin-bottom:18px}
+  .limit-row:last-child{margin-bottom:0}
+  .limit-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px;flex-wrap:wrap;gap:6px}
+  .limit-head .nm{font-size:13.5px;font-weight:600}
+  .limit-head .pct{font-family:var(--mono);font-size:13px;color:var(--muted)}
+  .limit-track{height:9px;background:var(--surface-2);border-radius:6px;overflow:hidden}
+  .limit-fill{height:100%;border-radius:6px;background:linear-gradient(90deg,var(--accent),var(--accent-soft));transition:width .3s}
+  .limit-fill.warn{background:linear-gradient(90deg,#caa23d,#e0c06e)}
+  .limit-fill.danger{background:linear-gradient(90deg,#c0432f,#e8856b)}
+  .limit-foot{display:flex;justify-content:space-between;font-size:11.5px;color:var(--faint);margin-top:6px;font-family:var(--mono)}
+
+  /* tips */
+  .tips{display:flex;flex-direction:column;gap:10px}
+  .tip{display:flex;gap:12px;align-items:flex-start;background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.55}
+  .tip .ico{font-size:16px;line-height:1.4}
+  .tip b{color:var(--accent-soft)}
 </style>
 </head>
 <body>
@@ -211,8 +229,27 @@
       <button class="lnk copyWS">copiar</button>
     </div>
     <div class="wsfull" style="display:none;margin:-6px 0 14px"><code class="wsCode"></code></div>
+
+    <div class="panel" id="todayPanel" style="display:none">
+      <h3>Hoje</h3>
+      <p class="desc">Uso de hoje, no seu horário local.</p>
+      <div class="grid-cards" id="todayCards"></div>
+    </div>
+
+    <div class="panel" id="limitsPanel" style="display:none">
+      <h3>Limite de uso<button class="priceedit" id="editLimits">ajustar limites</button></h3>
+      <p class="desc">O Claude Code (assinatura) tem uma janela de 5h corridas e um teto semanal, que resetam sozinhos. A Anthropic não expõe esse número por API — isto é uma <b style="color:var(--text)">estimativa em tokens</b> que você calibra observando quando o app avisa "limite atingido".</p>
+      <div id="limitRows"></div>
+    </div>
+
     <div class="grid-cards" id="cards"></div>
     <div class="chips" id="insights"></div>
+
+    <div class="panel" id="tipsPanel" style="display:none">
+      <h3>Dicas pra render mais</h3>
+      <p class="desc">Sugestões geradas a partir do seu padrão de uso.</p>
+      <div class="tips" id="tips"></div>
+    </div>
 
     <div class="panel">
       <div class="hm-head">
@@ -318,6 +355,7 @@ async function cloudIngest(events, onP){ let total=0; const N=700;
   return total; }
 async function cloudSummary(){ return rpc('cc_summary',{p_ws:getWS()}); }
 async function cloudMerge(fromCode){ return rpc('cc_merge',{p_into:getWS(),p_from:fromCode}); }
+async function cloudRecent(sinceDate){ return rpc('cc_recent',{p_ws:getWS(),p_since:sinceDate.toISOString()}); }
 function summaryToAgg(j){ return {
   tot:{inp:j.tot.inp,out:j.tot.out,cw:j.tot.cw,cr:j.tot.cr},
   msgs:j.tot.msgs, min:j.min?new Date(j.min):null, max:j.max?new Date(j.max):null,
@@ -389,6 +427,146 @@ function priceFor(model){
   if(m.includes('haiku'))return PRICES.haiku;
   if(m.includes('sonnet'))return PRICES.sonnet;
   return PRICES.default;
+}
+function costOf(inp,out,cw,cr,model){ const p=priceFor(model);
+  return inp/1e6*p[0]+out/1e6*p[1]+cw/1e6*p[2]+cr/1e6*p[3]; }
+
+// ---- limites de uso (estimativa, não-oficial: a Anthropic não expõe isso por API) ----
+const FIVE_H = 5*3600e3, WEEK = 7*24*3600e3, RECENT_SPAN_DAYS = 8;
+const DEFAULT_LIMITS = { fiveH: 700000, weekly: 3000000 }; // tokens, plano Pro — editável
+let LIMITS = JSON.parse(localStorage.getItem('cc_limits')||'null') || structuredClone(DEFAULT_LIMITS);
+let RECENT = []; // eventos crus dos últimos RECENT_SPAN_DAYS dias: {ts,model,inp,out,cw,cr,tok}
+let limitTickHandle = null;
+
+function recentToRecords(j){
+  return (j||[]).map(([epoch,model,inp,out,cw,cr])=>{
+    inp=+inp||0; out=+out||0; cw=+cw||0; cr=+cr||0;
+    return {ts:new Date(epoch*1000), model:model||'', inp,out,cw,cr, tok:inp+out+cw+cr};
+  });
+}
+
+// janela de 5h: blocos sequenciais — um bloco novo começa quando passam 5h
+// desde o início do bloco atual, ou quando há um intervalo de inatividade >=5h.
+function currentFiveHBlock(recs, now){
+  let blockStart=null, lastTs=null;
+  const sorted=[...recs].sort((a,b)=>a.ts-b.ts);
+  let blockEvents=[];
+  for(const r of sorted){
+    if(blockStart===null || (r.ts-lastTs)>=FIVE_H || (r.ts-blockStart)>=FIVE_H){
+      blockStart=r.ts; blockEvents=[];
+    }
+    blockEvents.push(r); lastTs=r.ts;
+  }
+  if(blockStart===null || (now-blockStart)>=FIVE_H) return {active:false, start:null, resetAt:null, events:[]};
+  return {active:true, start:blockStart, resetAt:new Date(+blockStart+FIVE_H), events:blockEvents};
+}
+
+function weeklyWindow(recs, now){
+  const since=new Date(+now-WEEK);
+  const events=recs.filter(r=>r.ts>=since);
+  if(!events.length) return {events:[], resetAt:null};
+  const oldest=events.reduce((a,b)=>a.ts<b.ts?a:b);
+  return {events, resetAt:new Date(+oldest.ts+WEEK)};
+}
+
+function sumTok(events){ return events.reduce((s,r)=>s+r.tok,0); }
+function sumCost(events){ return events.reduce((s,r)=>s+costOf(r.inp,r.out,r.cw,r.cr,r.model),0); }
+
+function fmtCountdown(target, now){
+  if(!target) return '—';
+  let ms=+target-+now; if(ms<=0) return 'reseta agora';
+  const h=Math.floor(ms/3600e3), m=Math.floor((ms%3600e3)/60e3);
+  return h>0 ? `${h}h ${m}min` : `${m}min`;
+}
+
+function renderToday(recs){
+  const now=new Date();
+  const todayEvents=recs.filter(r=>r.ts.toDateString()===now.toDateString());
+  const tok=sumTok(todayEvents), cost=sumCost(todayEvents), msgs=todayEvents.length;
+  const avgDaily = CUR && CUR.days.size ? (CUR.tot.inp+CUR.tot.out+CUR.tot.cw+CUR.tot.cr)/CUR.days.size : 0;
+  const vsAvg = avgDaily? Math.round(tok/avgDaily*100):0;
+  const cards=[
+    {k:'Tokens hoje',v:fmtK(tok),meta: avgDaily? vsAvg+'% da sua média diária' : 'sem média ainda'},
+    {k:'Custo hoje (~)',v:cf(cost),meta:'estimativa, preço equivalente API'},
+    {k:'Mensagens hoje',v:nf.format(msgs),meta:msgs?'':'nenhuma ainda'},
+  ];
+  $('#todayCards').innerHTML=cards.map(c=>`<div class="card"><div class="k">${c.k}</div><div class="v">${c.v}</div><div class="meta">${c.meta}</div></div>`).join('');
+  $('#todayPanel').style.display='block';
+  return {tok,cost,msgs,events:todayEvents};
+}
+
+function limitRowHTML(name, used, limit, resetAt, now, note){
+  const pct = limit>0 ? Math.min(100, used/limit*100) : 0;
+  const cls = pct>=95?'danger':pct>=75?'warn':'';
+  const remaining = Math.max(0, limit-used);
+  return `<div class="limit-row">
+    <div class="limit-head"><span class="nm">${name}</span><span class="pct">${pct.toFixed(0)}% usado</span></div>
+    <div class="limit-track"><div class="limit-fill ${cls}" style="width:${pct}%"></div></div>
+    <div class="limit-foot"><span>${fmtK(used)} / ${fmtK(limit)} tokens · sobram ~${fmtK(remaining)}</span><span>${note||('reinicia em '+fmtCountdown(resetAt,now))}</span></div>
+  </div>`;
+}
+
+function renderLimits(recs){
+  const now=new Date();
+  const block=currentFiveHBlock(recs, now);
+  const week=weeklyWindow(recs, now);
+  const fiveHUsed = block.active? sumTok(block.events) : 0;
+  const weekUsed = sumTok(week.events);
+  $('#limitRows').innerHTML =
+    limitRowHTML('Sessão atual (5h corridas)', fiveHUsed, LIMITS.fiveH, block.resetAt, now, block.active?null:'janela livre · começa no próximo uso') +
+    limitRowHTML('Semana atual (7 dias corridos)', weekUsed, LIMITS.weekly, week.resetAt, now, week.events.length?null:'sem uso na semana');
+  $('#limitsPanel').style.display='block';
+  if(limitTickHandle) clearInterval(limitTickHandle);
+  limitTickHandle=setInterval(()=>{
+    const n=new Date();
+    document.querySelectorAll('#limitRows .limit-foot span:last-child').forEach((el,i)=>{
+      const target = i===0?block.resetAt:week.resetAt;
+      if(target && !el.textContent.includes('janela livre') && !el.textContent.includes('sem uso')) el.textContent='reinicia em '+fmtCountdown(target,n);
+    });
+  },30000);
+  return {fiveHUsed, weekUsed, block, week};
+}
+
+function renderTips(A, today, limitInfo){
+  const totTok=A.tot.inp+A.tot.out+A.tot.cw+A.tot.cr;
+  const crPct = totTok? A.tot.cr/totTok*100 : 0;
+  let opusTok=0; for(const [m,d] of A.model){ if((m||'').toLowerCase().includes('opus')) opusTok+=d.inp+d.out+d.cw+d.cr; }
+  const opusPct = totTok? opusTok/totTok*100 : 0;
+  const fiveHPctRaw = LIMITS.fiveH? limitInfo.fiveHUsed/LIMITS.fiveH*100 : 0;
+  const weekPctRaw = LIMITS.weekly? limitInfo.weekUsed/LIMITS.weekly*100 : 0;
+  const pctLabel = p => p>150 ? 'mais de 150%' : p.toFixed(0)+'%';
+
+  const tips=[];
+  if(fiveHPctRaw>=80) tips.push({ico:'⏳',html:`Você já usou <b>${pctLabel(fiveHPctRaw)}</b> da janela de 5h estimada. Se puder, dê um intervalo ou troque pra um modelo mais leve (Haiku/Sonnet) nas próximas tarefas até a janela resetar.`});
+  if(weekPctRaw>=80) tips.push({ico:'📅',html:`Uso semanal estimado em <b>${pctLabel(weekPctRaw)}</b> do seu limite configurado. Considere reservar o Opus só pra tarefas que realmente precisam de raciocínio mais pesado pelo resto da semana — ou ajustar o limite em "ajustar limites" se ele estiver muito baixo pro seu plano real.`});
+  if(crPct<25) tips.push({ico:'♻️',html:`Só <b>${crPct.toFixed(0)}%</b> dos seus tokens vêm de cache lido. Continue na mesma sessão pra tarefas relacionadas em vez de abrir conversas novas — isso reaproveita o contexto em cache e sai bem mais barato.`});
+  else if(crPct>=50) tips.push({ico:'♻️',html:`Ótimo reaproveitamento de cache (<b>${crPct.toFixed(0)}%</b>). Continue mantendo sessões longas pra tarefas relacionadas.`});
+  if(opusPct>=40) tips.push({ico:'🧠',html:`Opus respondeu por <b>${opusPct.toFixed(0)}%</b> dos seus tokens. Pra tarefas simples (formatação, busca, perguntas diretas), Sonnet ou Haiku custam uma fração disso.`});
+  if(today.msgs>0 && today.tok>0){
+    const avgPerMsg = today.tok/today.msgs;
+    if(avgPerMsg>50000) tips.push({ico:'✂️',html:`Suas mensagens de hoje estão pesadas (~${fmtK(Math.round(avgPerMsg))} tokens/msg em média). Use <b>/compact</b> de vez em quando pra encolher o histórico da conversa, ou leia só os trechos necessários de arquivos grandes.`});
+  }
+  tips.push({ico:'🗂️',html:`Peça leituras pontuais (arquivo + trecho) em vez de pastas inteiras quando possível — menos tokens de entrada por turno.`});
+  if(!tips.some(t=>t.ico==='⏳') && !tips.some(t=>t.ico==='📅')) tips.push({ico:'✅',html:`Seu uso está tranquilo em relação às janelas de 5h e semanal. Bom momento pra tarefas maiores, se precisar.`});
+
+  $('#tips').innerHTML = tips.slice(0,6).map(t=>`<div class="tip"><span class="ico">${t.ico}</span><span>${t.html}</span></div>`).join('');
+  $('#tipsPanel').style.display='block';
+}
+
+async function refreshRecent(){
+  try{
+    const since=new Date(Date.now()-RECENT_SPAN_DAYS*24*3600e3);
+    const j=await cloudRecent(since);
+    RECENT=recentToRecords(j);
+    try{ localStorage.setItem('cc_recent_cache', JSON.stringify(j)); }catch{}
+  }catch(e){
+    const cached=localStorage.getItem('cc_recent_cache');
+    if(cached){ try{ RECENT=recentToRecords(JSON.parse(cached)); }catch{ RECENT=[]; } }
+    else return;
+  }
+  const today=renderToday(RECENT);
+  const limitInfo=renderLimits(RECENT);
+  if(CUR) renderTips(CUR, today, limitInfo);
 }
 
 // ---------- PARSER ----------
@@ -467,7 +645,7 @@ function render(A){
   // CARDS
   const totTok=A.tot.inp+A.tot.out+A.tot.cw+A.tot.cr;
   let cost=0, cacheSavings=0; for(const [model,m] of A.model){ const p=priceFor(model);
-    cost += m.inp/1e6*p[0]+m.out/1e6*p[1]+m.cw/1e6*p[2]+m.cr/1e6*p[3];
+    cost += costOf(m.inp,m.out,m.cw,m.cr,model);
     cacheSavings += m.cr/1e6*(p[0]-p[3]); }
   const span = (A.min&&A.max)? Math.max(1,Math.round((A.max-A.min)/864e5)+1):0;
   const cards=[
@@ -506,7 +684,7 @@ function render(A){
   // MODELS TABLE
   const models=[...A.model.entries()].sort((a,b)=>(b[1].inp+b[1].out+b[1].cw+b[1].cr)-(a[1].inp+a[1].out+a[1].cw+a[1].cr));
   $('#modelRows').innerHTML=models.map(([name,m],i)=>{
-    const p=priceFor(name); const c=m.inp/1e6*p[0]+m.out/1e6*p[1]+m.cw/1e6*p[2]+m.cr/1e6*p[3];
+    const c=costOf(m.inp,m.out,m.cw,m.cr,name);
     const tt=m.inp+m.out+m.cw+m.cr; const col=MODEL_COLORS[i%MODEL_COLORS.length];
     return `<tr><td><span class="mdot" style="background:${col}"></span>${name||'(desconhecido)'}</td>
       <td class="n">${fmtK(m.inp)}</td><td class="n">${fmtK(m.out)}</td><td class="n">${fmtK(m.cw+m.cr)}</td>
@@ -621,6 +799,7 @@ function handle(fileList){
       try{ localStorage.setItem('cc_cache',JSON.stringify(j)); }catch{}
       render(summaryToAgg(j)); showDash(); window.scrollTo({top:0,behavior:'smooth'});
       flashSync(inserted ? ('+'+nf.format(inserted)+' novos eventos salvos') : 'tudo já estava salvo');
+      refreshRecent();
     }catch(e){
       setStatus('Nuvem indisponível ('+e.message+'). Mostrando só este aparelho — tente enviar de novo quando voltar a conexão.',true);
       render(aggregate(res.records)); showDash();
@@ -665,6 +844,7 @@ document.querySelectorAll('.mergeWS').forEach(b=>b.onclick=async()=>{
     render(summaryToAgg(j)); showDash(); window.scrollTo({top:0,behavior:'smooth'});
     flashSync(moved ? ('+'+nf.format(moved)+' eventos juntados') : 'nada novo pra juntar');
     setStatus('');
+    refreshRecent();
   }catch(e){ setStatus('Falha ao juntar: '+e.message,true); }
 });
 
@@ -673,6 +853,16 @@ $('#editPrice').onclick=()=>{
   const v=prompt('Preço Sonnet US$/1M (entrada,saída,escrita-cache,leitura-cache):',cur);
   if(!v)return; const a=v.split(',').map(Number); if(a.length===4&&a.every(n=>!isNaN(n))){ PRICES.sonnet=a;
     localStorage.setItem('cc_prices',JSON.stringify(PRICES)); render(CUR); }
+};
+
+$('#editLimits').onclick=()=>{
+  const v1=prompt('Limite estimado da janela de 5h (em tokens). Ajuste observando quando o Claude Code avisa "limite atingido":',LIMITS.fiveH);
+  if(v1===null)return; const n1=Number(v1.replace(/[^\d.]/g,''));
+  const v2=prompt('Limite estimado semanal (em tokens):',LIMITS.weekly);
+  if(v2===null)return; const n2=Number(v2.replace(/[^\d.]/g,''));
+  if(!isNaN(n1)&&n1>0) LIMITS.fiveH=n1; if(!isNaN(n2)&&n2>0) LIMITS.weekly=n2;
+  localStorage.setItem('cc_limits',JSON.stringify(LIMITS));
+  if(RECENT.length){ const today=renderToday(RECENT); const limitInfo=renderLimits(RECENT); if(CUR) renderTips(CUR, today, limitInfo); }
 };
 
 // drag & drop (inclui pastas via webkitGetAsEntry)
@@ -704,11 +894,11 @@ function walk(entry,out){
   if(navigator.onLine){
     try{ const j=await cloudSummary();
       if(j&&j.tot&&j.tot.msgs>0){ localStorage.setItem('cc_cache',JSON.stringify(j));
-        render(summaryToAgg(j)); showDash(); return; } }
+        render(summaryToAgg(j)); showDash(); refreshRecent(); return; } }
     catch{}
   }
   const cached=localStorage.getItem('cc_cache');
-  if(cached){ try{ const j=JSON.parse(cached); if(j.tot&&j.tot.msgs>0){ render(summaryToAgg(j)); showDash(); return; } }catch{} }
+  if(cached){ try{ const j=JSON.parse(cached); if(j.tot&&j.tot.msgs>0){ render(summaryToAgg(j)); showDash(); refreshRecent(); return; } }catch{} }
   showIntake();
 })();
 
