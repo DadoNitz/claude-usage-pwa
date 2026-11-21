@@ -177,6 +177,16 @@
   .tip{display:flex;gap:12px;align-items:flex-start;background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.55}
   .tip .ico{font-size:16px;line-height:1.4}
   .tip b{color:var(--accent-soft)}
+
+  /* motion: press feedback + bars grow from their baseline when (re)rendered */
+  @media (prefers-reduced-motion: no-preference){
+    .btn,.ghost-btn{transition:color .15s,background-color .15s,border-color .15s,transform .1s cubic-bezier(.2,.8,.2,1)}
+    .btn:active,.ghost-btn:active{transform:scale(.97)}
+    .bar-fill,.limit-fill{transform-origin:left;animation:grow-x .5s cubic-bezier(.2,.8,.2,1) both}
+    .wk .bar{transform-origin:bottom;animation:grow-y .5s cubic-bezier(.2,.8,.2,1) both}
+  }
+  @keyframes grow-x{from{transform:scaleX(0)}}
+  @keyframes grow-y{from{transform:scaleY(0)}}
 </style>
 </head>
 <body>
